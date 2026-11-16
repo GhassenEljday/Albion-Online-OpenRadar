@@ -1,0 +1,78 @@
+name: Build Windows exe
+
+# Personal helper: builds a runnable OpenRadar-windows-amd64.exe from the checked-out branch.
+# Mirrors the "enhance-windows" job of release.yml (same steps, no release publishing).
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to build"
+        required: false
+        default: "feat/pip-players-panel"
+        type: string
+  push:
+    branches: [build-exe]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VERSION: pip-panel
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || 'feat/pip-players-panel' }}
+      - uses: ./.github/actions/setup
+
+      - name: Prepare embedded assets
+        shell: bash
+        run: |
+          npm run build
+          npx tsx tools/compress-game-data.ts web/ao-bin-dumps --delete-originals
+
+      - name: Install goversioninfo
+        run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+
+      - name: Generate versioninfo.json
+        shell: pwsh
+        run: |
+          $json = @{
+            FixedFileInfo = @{
+              FileVersion    = @{ Major = 0; Minor = 0; Patch = 0; Build = 0 }
+              ProductVersion = @{ Major = 0; Minor = 0; Patch = 0; Build = 0 }
+            }
+            StringFileInfo = @{
+              FileDescription = "OpenRadar - Albion Online Radar"
+              FileVersion     = "${{ env.VERSION }}"
+              ProductName     = "OpenRadar"
+              ProductVersion  = "${{ env.VERSION }}"
+              LegalCopyright  = "MIT License"
+            }
+            IconPath = "../../web/images/favicon.ico"
+          } | ConvertTo-Json -Depth 10
+          $json | Out-File -FilePath cmd/radar/versioninfo.json -Encoding UTF8
+
+      - name: Generate Windows resources
+        run: goversioninfo -64
+        working-directory: cmd/radar
+
+      - name: Build Windows binary
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          mkdir -p dist
+          go build \
+            -ldflags="-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+            -o dist/OpenRadar-windows-amd64.exe ./cmd/radar
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenRadar-windows-amd64
+          path: dist/OpenRadar-windows-amd64.exe
+          retention-days: 14
